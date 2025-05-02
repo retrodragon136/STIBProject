@@ -2,16 +2,41 @@ import loader.CsvLoader;
 import model.*;
 import repository.DataRepository;
 
+import java.time.Duration;
+import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.*;
-import java.util.stream.Collectors;
-import java.io.*;
+import java.util.Scanner;
 
 public class Main {
     static String[] agencies = {"STIB", "SNCB", "TEC", "DELIJN"};
 
     public static void main(String[] args) {
-        String basePath = "data/GTFS/";
+        Scanner scanner = new Scanner(System.in);
+        System.out.print("Arrêt de départ : ");
+        String start = scanner.nextLine().trim();
 
+        System.out.print("Arrêt de destination : ");
+        String destination = scanner.nextLine().trim();
+
+        Duration departureTime;
+        boolean validInput = false;
+
+        while (!validInput) {
+            System.out.print("Heure de départ (HH:mm) :");
+            String timeInput = scanner.nextLine().trim();
+            try {
+                LocalTime time = LocalTime.parse(timeInput, DateTimeFormatter.ofPattern("HH:mm"));
+                departureTime = Duration.between(LocalTime.MIN, time);
+                System.out.println("Durée en secondes depuis minuit : " + departureTime.getSeconds());
+                validInput = true;
+            } catch (DateTimeParseException e) {
+                System.out.println("Format invalide. Veuillez entrer l'heure au format HH:mm.");
+            }
+        }
+
+        String basePath = "stib/data/GTFS/";
         try {
             for (String agency : agencies) {
                 System.out.println("\n== Loading " + agency + " ==");
