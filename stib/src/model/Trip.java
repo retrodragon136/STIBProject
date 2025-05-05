@@ -1,4 +1,7 @@
 package model;
 
-public record Trip(String tripId,String routeId) {
+import java.util.ArrayList;
+import java.util.List;
+
+public record Trip(String tripId, String routeId) {
 }

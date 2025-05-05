@@ -1,18 +1,24 @@
 package model;
 
+import loader.CsvLoader;
+import repository.DataRepository;
+
 import java.time.LocalTime;
 import java.util.*;
 import java.util.stream.Collectors;
+
+
 
 public class TransportGraph {
     private Map<String, Stop> stops;
     private Map<String, Route> routes;
     private Map<String, Trip> trips;
     private Map<String, List<StopTime>> stopTimesByStop;
+    static String[] agencies = {"STIB", "SNCB", "TEC", "DELIJN"};
+    static String basePath = "stib/data/GTFS/";
+    public DataRepository repo = null;
 
     public List<Connection> findShortestPath(String startStopId, String endStopId, LocalTime startTime) {
-        // Chargement initial des données (peut être fait une fois au début)
-        loadData();
 
         // Initialisation
         PriorityQueue<GraphNode> queue = new PriorityQueue<>(Comparator.comparing(n -> n.time));
@@ -30,30 +36,30 @@ public class TransportGraph {
             int currentDistance = distances.get(currentNode);
 
             // Si on a atteint la destination
-            if (currentNode.stop.getId().equals(endStopId)) {
+            if (currentNode.stop.getStopId().equals(endStopId)) {
                 return reconstructPath(predecessors, currentNode);
             }
 
             // 1. Explorer les départs depuis cet arrêt après le temps courant
-            List<StopTime> departures = stopTimesByStop.get(currentNode.stop.getId()).stream()
-                    .filter(st -> st.departureTime.isAfter(currentNode.time))
-                    .collect(Collectors.toList());
+            List<StopTime> departures = stopTimesByStop.get(currentNode.stop.getStopId()).stream()
+                    .filter(st -> st.departureTime().isAfter(currentNode.time))
+                    .toList();
 
             for (StopTime departure : departures) {
-                Trip trip = trips.get(departure.tripId);
-                List<StopTime> tripStopTimes = trip.getStopTimes();
+                Trip trip = trips.get(departure.getTripId());
+                List<StopTime> tripStopTimes = repo.getStopTimesByTripId(trip.tripId());
 
                 // Trouver la position de ce départ dans la séquence du trajet
-                int currentSequence = departure.sequence;
+                int currentSequence = departure.getStopSequence();
 
                 // Explorer les arrêts suivants dans ce trajet
                 for (int i = currentSequence; i < tripStopTimes.size(); i++) {
                     StopTime nextStopTime = tripStopTimes.get(i);
-                    LocalTime arrivalTime = nextStopTime.departureTime;
-                    int travelDuration = (int) ChronoUnit.MINUTES.between(
-                            departure.departureTime, arrivalTime);
+                    LocalTime arrivalTime = nextStopTime.departureTime();
+                    int travelDuration = (int)  java.time.Duration.between(
+                            departure.departureTime(), arrivalTime).toMinutes();
 
-                    GraphNode nextNode = new GraphNode(nextStopTime.stop, arrivalTime);
+                    GraphNode nextNode = new GraphNode(repo.getStopById(nextStopTime.getStopId()), arrivalTime);
                     int newDistance = currentDistance + travelDuration;
 
                     if (!distances.containsKey(nextNode) || newDistance < distances.get(nextNode)) {
@@ -86,9 +92,28 @@ public class TransportGraph {
         return path;
     }
 
-    private void loadData() {
-        // Charger les données depuis les fichiers CSV
-        // et construire les structures:
-        // stops, routes, trips, stopTimesByStop
+    public void loadData() {
+        try {
+            for (String agency : agencies) {
+                System.out.println("\n== Loading " + agency + " ==");
+
+                List<Route> DataRoutes = CsvLoader.loadRoutes(basePath + agency + "/routes.csv");
+                List<Trip> DataTrips = CsvLoader.loadTrips(basePath + agency + "/trips.csv");
+                List<Stop> DataStops = CsvLoader.loadStops(basePath + agency + "/stops.csv");
+                List<StopTime> DataStopTimes = CsvLoader.loadStopTimes(basePath + agency + "/stop_times.csv");
+                repo.indexStops(DataStops);
+                repo.indexRoutes(DataRoutes);
+                repo.indexTrips(DataTrips);
+                repo.indexStopTimes(DataStopTimes);
+
+                System.out.println("Routes: " + DataRoutes.size());
+                System.out.println("Trips: " + DataTrips.size());
+                System.out.println("Stops: " + DataStops.size());
+                System.out.println("StopTimes: " + DataStopTimes.size());
+            }
+
+        } catch (Exception e) {
+            e.printStackTrace();
+        }
     }
 }

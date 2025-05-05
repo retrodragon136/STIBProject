@@ -3,6 +3,7 @@ package loader;
 import model.*;
 import java.io.*;
 import java.time.Duration;
+import java.time.LocalTime;
 import java.util.*;
 
 public class CsvLoader {
@@ -27,12 +28,19 @@ public class CsvLoader {
         return result;
     }
 
-    public static Duration parseExtendedTime(String timeStr) {
+    public static LocalTime parseExtendedTime(String timeStr) {
         String[] parts = timeStr.split(":");
         int hours = Integer.parseInt(parts[0]);
         int minutes = Integer.parseInt(parts[1]);
         int seconds = Integer.parseInt(parts[2]);
-        return Duration.ofHours(hours).plusMinutes(minutes).plusSeconds(seconds);
+
+        if(hours < 23) {
+            return LocalTime.of(hours, minutes, seconds);
+        }
+
+        // Adjust hours to be within 0-23 range
+        hours = hours % 24;
+        return LocalTime.of(hours, minutes, seconds);
     }
 
     public static List<Route> loadRoutes(String file) throws IOException {

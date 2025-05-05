@@ -36,4 +36,12 @@ public class DataRepository {
             list.sort(Comparator.comparingInt(StopTime::stopSequence));
         }
     }
+
+    public List<StopTime> getStopTimesByTripId (String tripId) {
+        return stopTimesByTrip.getOrDefault(tripId, Collections.emptyList());
+    }
+
+    public Stop getStopById(String stopId) {
+        return stopsById.get(stopId);
+    }
 }
