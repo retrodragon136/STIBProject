@@ -12,4 +12,20 @@ public class Connection {
         this.duration = duration;
         this.trip = trip;
     }
+
+    public GraphNode getFrom() {
+        return from;
+    }
+
+    public GraphNode getTo() {
+        return to;
+    }
+
+    public int getDuration() {
+        return duration;
+    }
+
+    public Trip getTrip() {
+        return trip;
+    }
 }

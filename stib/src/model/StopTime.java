@@ -5,8 +5,8 @@ import java.time.LocalTime;
 
 public record StopTime(String tripId, LocalTime departureTime /** minutes depuis minuit (peut dépasser 1440)**/, String stopId, int stopSequence) {
 
-    public int getTripId() {
-        return Integer.parseInt(tripId);
+    public String getTripId() {
+        return tripId;
     }
 
     public int getStopSequence() {
