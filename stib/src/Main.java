@@ -1,4 +1,5 @@
 import model.Connection;
+import model.GraphNode;
 import model.Route;
 import model.TransportGraph;
 
@@ -38,25 +39,21 @@ public class Main {
 //            }
 //        }
 
-        String start = "Machelen";
-        String destination = "Van Cutsem";
-        LocalTime departureTime = LocalTime.of(10, 0);
+        String start = "Vandenhoven";
+        String destination = "Tilleul";
+        LocalTime departureTime = LocalTime.of(12, 0);
 
 
-        List<Connection> path = graph.findShortestPath(start, destination, departureTime);
+        List<GraphNode> path = graph.findShortestPath(start, destination, departureTime);
+        if (path == null || path.isEmpty()) {
+            System.out.println("Aucun chemin trouvé entre " + start + " et " + destination + " à " + departureTime);
+            return;
+        }
+        String pathString = graph.formatPath(path);
         System.out.println("Chemin le plus court trouvé entre " + start + " et " + destination + " à " + departureTime);
 
-        if (path.isEmpty()) {
-            System.out.println("Aucun chemin trouvé.");
-        } else {
-            for (Connection connection : path) {
-                Route route = graph.repo.getRouteByTripId(connection.getTrip().tripId());
-                System.out.println("Take " + route.getRouteId().split("-")[0] +" "+ route.getRouteType() +" " + route.getShortName() +
-                        " from " + connection.getFrom().getStop().stopName() +
-                        " (" + connection.getFrom().getTime().format(DateTimeFormatter.ofPattern("HH:mm")) + ")" +
-                        " to " + connection.getTo().getStop().stopName() +
-                        " (" + connection.getTo().getTime().format(DateTimeFormatter.ofPattern("HH:mm")) + ").");
-            }
-        }
+        System.out.println(path);
+        System.out.println(pathString);
     }
+
 }

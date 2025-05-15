@@ -1,43 +1,36 @@
 package model;
 
-import java.time.Duration;
 import java.time.LocalTime;
+import java.util.Objects;
 
 public class GraphNode {
 
-    Stop stop;
+    String stopId;
     LocalTime time;
+    double gScore;  // Coût réel depuis le départ
+    double fScore;  // gScore + heuristique
+    GraphNode parent;
+    String tripIdUsed;
 
-    // Pour la reconstruction du chemin
-    GraphNode previousNode;
-    Trip arrivingTrip;
-
-    public GraphNode(Stop stop, LocalTime time) {
-        this.stop = stop;
+    public GraphNode(String stopId, LocalTime time) {
+        this.stopId = stopId;
         this.time = time;
+        this.gScore = Double.POSITIVE_INFINITY;
+        this.fScore = Double.POSITIVE_INFINITY;
+        this.parent = null;
+        this.tripIdUsed = null;
     }
 
-    public Stop getStop() {
-        return stop;
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) return true;
+        if (o == null || getClass() != o.getClass()) return false;
+        GraphNode graphNode = (GraphNode) o;
+        return stopId.equals(graphNode.stopId) && time.equals(graphNode.time);
     }
 
-    public LocalTime getTime() {
-        return time;
-    }
-
-    public GraphNode getPreviousNode() {
-        return previousNode;
-    }
-
-    public void setPreviousNode(GraphNode previousNode) {
-        this.previousNode = previousNode;
-    }
-
-    public Trip getArrivingTrip() {
-        return arrivingTrip;
-    }
-
-    public void setArrivingTrip(Trip arrivingTrip) {
-        this.arrivingTrip = arrivingTrip;
+    @Override
+    public int hashCode() {
+        return Objects.hash(stopId, time);
     }
 }
