@@ -44,11 +44,18 @@ public class TransportGraph {
             PriorityQueue<GraphNode> openSet = new PriorityQueue<>(Comparator.comparingDouble(node -> node.fScore));
             Set<GraphNode> closedSet = new HashSet<>();
 
+            StopTime startStopTime = stopTimesByTrip.getOrDefault(tripId, Collections.emptyList()).stream()
+                    .filter(st -> st.stopId().equals(startStopId))
+                    .findFirst()
+                    .orElse(null);
+
+            if (startStopTime == null) {
+                continue; // Skip this trip if no matching StopTime is found
+            }
             // Initialize start node for this trip
-            GraphNode startNode = new GraphNode(startStopId, startTime);
+            GraphNode startNode = new GraphNode(startStopTime, startStopTime.departureTime());
             startNode.gScore = 0;
             startNode.fScore = haversineHeuristic(startStopId, endStopId);
-            startNode.tripIdUsed = tripId;
             openSet.add(startNode);
 
             // Run A* for this starting trip
@@ -73,7 +80,7 @@ public class TransportGraph {
         while (!openSet.isEmpty()) {
             GraphNode current = openSet.poll();
 
-            if (repo.getStopById(current.stopId).stopName().equals(repo.getStopById(endStopId).stopName())) {
+            if (repo.getStopById(current.stopTime.stopId()).stopName().equals(repo.getStopById(endStopId).stopName())) {
                 return reconstructPath(current);
             }
 
@@ -88,7 +95,7 @@ public class TransportGraph {
                 if (tentativeGScore < neighbor.gScore) {
                     neighbor.parent = current;
                     neighbor.gScore = tentativeGScore;
-                    neighbor.fScore = tentativeGScore + haversineHeuristic(neighbor.stopId, endStopId);
+                    neighbor.fScore = tentativeGScore + haversineHeuristic(neighbor.stopTime.stopId(), endStopId);
 
                     if (!openSet.contains(neighbor)) {
                         openSet.add(neighbor);
@@ -128,37 +135,26 @@ public class TransportGraph {
         Set<String> addedStopIds = new HashSet<>(); // Track already added stops
 
         // 1. Continue current trip (only next stop)
-        if (node.tripIdUsed != null) {
-            List<StopTime> tripStops = stopTimesByTrip.get(node.tripIdUsed);
-            if (tripStops != null) {
-                // Find current position
-                int currentIndex = -1;
-                for (int i = 0; i < tripStops.size(); i++) {
-                    StopTime st = tripStops.get(i);
-                    if (st.stopId().equals(node.stopId) && !st.departureTime().isBefore(node.time)) {
-                        currentIndex = i;
-                        break;
-                    }
-                }
+        List<StopTime> tripStops = stopTimesByTrip.get(node.stopTime.tripId());
+        if (tripStops != null) {
+            int currentIndex = node.stopTime.stopSequence();
 
-                // Add only the very next stop
-                if (currentIndex != -1 && currentIndex < tripStops.size() - 1) {
-                    StopTime nextStop = tripStops.get(currentIndex + 1);
-                    if (!nextStop.departureTime().isBefore(node.time) &&
-                            !addedStopIds.contains(nextStop.stopId())) {
+            // Add only the very next stop following the sequence incrementely
+            if (currentIndex != -1 && currentIndex < tripStops.size() - 1) {
+                StopTime nextStop = tripStops.get(currentIndex + 1);
+                if (!nextStop.departureTime().isBefore(node.time) &&
+                        !addedStopIds.contains(nextStop.stopId())) {
 
-                        GraphNode neighbor = new GraphNode(nextStop.stopId(), nextStop.departureTime());
-                        neighbor.tripIdUsed = node.tripIdUsed;
-                        neighbors.add(neighbor);
-                        addedStopIds.add(nextStop.stopId());
-                    }
+                    GraphNode neighbor = new GraphNode(nextStop, nextStop.departureTime());
+                    neighbors.add(neighbor);
+                    addedStopIds.add(nextStop.stopId());
                 }
             }
         }
 
         // 2. Transfer to other trips (only first stop)
-        stopTimesByStop.getOrDefault(node.stopId, Collections.emptyList()).stream()
-                .filter(st -> !st.tripId().equals(node.tripIdUsed)) // Different trip
+        stopTimesByStop.getOrDefault(node.stopTime.stopId(), Collections.emptyList()).stream()
+                .filter(st -> !st.tripId().equals(node.stopTime.tripId())) // Different trip
                 .filter(st -> !st.departureTime().isBefore(node.time)) // Future departures
                 .sorted(Comparator.comparing(StopTime::departureTime)) // Earliest first
                 .forEach(st -> {
@@ -166,7 +162,7 @@ public class TransportGraph {
                     if (transferTripStops != null) {
                         int transferIndex = -1;
                         for (int i = 0; i < transferTripStops.size(); i++) {
-                            if (transferTripStops.get(i).stopId().equals(node.stopId)) {
+                            if (transferTripStops.get(i).stopId().equals(node.stopTime.stopId())) {
                                 transferIndex = i;
                                 break;
                             }
@@ -175,15 +171,9 @@ public class TransportGraph {
                         if (transferIndex != -1 && transferIndex < transferTripStops.size() - 1) {
                             StopTime nextTransferStop = transferTripStops.get(transferIndex + 1);
                             if (!addedStopIds.contains(nextTransferStop.stopId())) {
-                                GraphNode neighbor = new GraphNode(nextTransferStop.stopId(), nextTransferStop.departureTime());
-                                neighbor.tripIdUsed = st.tripId();
+                                GraphNode neighbor = new GraphNode(nextTransferStop, nextTransferStop.departureTime());
                                 neighbors.add(neighbor);
                                 addedStopIds.add(nextTransferStop.stopId());
-
-                                // Limit to 5 unique transfer options
-                                if (addedStopIds.size() >= 5) {
-                                    return;
-                                }
                             }
                         }
                     }
@@ -246,10 +236,10 @@ public class TransportGraph {
 
         for (int i = 0; i < path.size(); i++) {
             GraphNode node = path.get(i);
-            Stop stop = stops.get(node.stopId);
+            Stop stop = stops.get(node.stopTime.stopId());
 
             // Handle trip changes or walking segments
-            if (currentTripId == null || !currentTripId.equals(node.tripIdUsed)) {
+            if (currentTripId == null || !currentTripId.equals(node.stopTime.tripId())) {
                 // Finish previous segment if exists
                 if (currentStop != null && currentDeparture != null) {
                     itinerary.append(String.format(" to %s (%s)\n",
@@ -257,7 +247,7 @@ public class TransportGraph {
                             node.time));
 
                     // Add walking time if needed
-                    if (i < path.size() - 1 && node.tripIdUsed == null) {
+                    if (i < path.size() - 1 && node.stopTime.tripId() == null) {
                         itinerary.append(String.format("Walk from %s (%s) ",
                                 currentStop.stopName(),
                                 node.time));
@@ -268,21 +258,22 @@ public class TransportGraph {
                 }
 
                 // Start new segment
-                if (node.tripIdUsed != null) {
-                    Trip trip = trips.get(node.tripIdUsed);
+                String tripId = node.stopTime.tripId();
+                if (tripId != null) {
+                    Trip trip = trips.get(tripId);
                     Route route = routes.get(trip.routeId());
                     currentRouteType = getTransportType(route.routeType());
                     currentRouteName = route.shortName();
 
                     itinerary.append(String.format("Take %s %s %s from %s (%s) ",
-                            route.routeLongName().split(" ")[0], // Agency name
+                            route.routeId().split("-")[0], // Agency name
                             currentRouteType,
                             currentRouteName,
                             stop.stopName(),
                             node.time));
                 }
 
-                currentTripId = node.tripIdUsed;
+                currentTripId = tripId;
             }
 
             currentStop = stop;

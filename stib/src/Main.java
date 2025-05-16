@@ -39,8 +39,8 @@ public class Main {
 //            }
 //        }
 
-        String start = "Vandenhoven";
-        String destination = "Tilleul";
+        String start = "Biplan";
+        String destination = "Haren";
         LocalTime departureTime = LocalTime.of(12, 0);
 
 
