@@ -39,9 +39,9 @@ public class Main {
 //            }
 //        }
 
-        String start = "Machelen";
-        String destination = "Yser";
-        LocalTime departureTime = LocalTime.of(12, 0);
+        String start = "Bordet Station";
+        String destination = "Rogier";
+        LocalTime departureTime = LocalTime.of(8, 0);
 
 
         List<GraphNode> path = graph.findShortestPath(start, destination, departureTime);
@@ -52,7 +52,6 @@ public class Main {
         String pathString = graph.formatPath(path);
         System.out.println("Chemin le plus court trouvé entre " + start + " et " + destination + " à " + departureTime);
 
-        System.out.println(path);
         System.out.println(pathString);
     }
 

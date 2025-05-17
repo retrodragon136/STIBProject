@@ -100,7 +100,8 @@ public class TransportGraph {
                     neighbor.fScore = tentativeGScore +
                             haversineHeuristic(neighbor.stopTime.stopId(), endStops);
 
-                    if (!openSet.contains(neighbor)) {
+                    if (!openSet.contains(neighbor)  || openSet.contains(neighbor) &&
+                            neighbor.fScore < current.fScore) {
                         openSet.add(neighbor);
                     }
                 }
@@ -119,10 +120,15 @@ public class TransportGraph {
                 .collect(Collectors.toList());
     }
 
+    // Helper method to add pairs
+    private void addStopRouteCombo(Map<String, List<String>> map, String stopId, String route) {
+        map.computeIfAbsent(stopId, k -> new ArrayList<>()).add(route);
+    }
+
 
     private List<GraphNode> getNeighbors(GraphNode node) {
         List<GraphNode> neighbors = new ArrayList<>();
-        Set<String> addedStopIds = new HashSet<>(); // Track already added stops
+        Map<String, List<String>> addedStopRouteCombos = new HashMap<>();
         String currentRouteId = trips.get(node.stopTime.tripId()).routeId();
 
         // 1. Continue current trip (only next stop)
@@ -133,48 +139,61 @@ public class TransportGraph {
             // Add only the very next stop following the sequence incrementely
             if (currentIndex != -1 && currentIndex < tripStops.size()) {
                 StopTime nextStop = tripStops.get(currentIndex);
-                if (!nextStop.departureTime().isBefore(node.time) &&
-                        !addedStopIds.contains(nextStop.stopId())) {
-
+                if (!nextStop.departureTime().isBefore(node.time)) {
                     GraphNode neighbor = new GraphNode(nextStop, nextStop.departureTime());
                     neighbors.add(neighbor);
-                    addedStopIds.add(nextStop.stopId());
+                    addStopRouteCombo(addedStopRouteCombos, nextStop.stopId(), trips.get(nextStop.tripId()).routeId());
                 }
             }
         }
 
         // 2. Transfer to other trips (only first stop)
-        stopTimesByStop.getOrDefault(node.stopTime.stopId(), Collections.emptyList()).stream()
-                .filter(st -> {
-                    // Only allow transfers to different routes
-                    String transferRouteId = trips.get(st.tripId()).routeId();
-                    return !transferRouteId.equals(currentRouteId); // Different route check
-                })
-                .filter(st -> !st.departureTime().isBefore(node.time)) // Future departures
-                .sorted(Comparator.comparing(StopTime::departureTime)) // Earliest first
-                .forEach(st -> {
-                    List<StopTime> transferTripStops = stopTimesByTrip.get(st.tripId());
-                    if (transferTripStops != null) {
-                        int transferIndex = -1;
-                        for (int i = 0; i < transferTripStops.size(); i++) {
-                            if (transferTripStops.get(i).stopId().equals(node.stopTime.stopId())) {
-                                transferIndex = i;
-                                break;
-                            }
-                        }
-
-                        if (transferIndex != -1 && transferIndex < transferTripStops.size() - 1) {
-                            StopTime nextTransferStop = transferTripStops.get(transferIndex);
-                            if (!addedStopIds.contains(nextTransferStop.stopId())) {
-                                GraphNode neighbor = new GraphNode(nextTransferStop, nextTransferStop.departureTime());
-                                neighbors.add(neighbor);
-                                addedStopIds.add(nextTransferStop.stopId());
-                            }
+        List<String> stopIdsBySameName = repo.getStopsIdsWithSameName(node.stopTime.stopId());
+        for(String stopId : stopIdsBySameName) {
+            List<StopTime> stopTimesBy = stopTimesByStop.getOrDefault(stopId, Collections.emptyList()).stream()
+                    .filter(st -> {
+                        // Only allow transfers to different routes
+                        String transferRouteId = trips.get(st.tripId()).routeId();
+                        return !transferRouteId.equals(currentRouteId); // Different route check
+                    })
+                    .filter(st -> !st.departureTime().isBefore(node.time)) // Future departures
+                    .filter(st -> st.departureTime().isBefore(node.time.plus(Duration.ofMinutes(30))))
+                    .sorted(Comparator.comparing(StopTime::departureTime)).toList(); // Earliest first
+            for (StopTime stopTime : stopTimesBy) {
+                List<StopTime> transferTripStops = stopTimesByTrip.get(stopTime.tripId());
+                if (transferTripStops != null) {
+                    int transferIndex = -1;
+                    for (int i = 0; i < transferTripStops.size(); i++) {
+                        if (transferTripStops.get(i).stopId().equals(stopId)) {
+                            transferIndex = i;
+                            break;
                         }
                     }
-                });
 
+                    if (transferIndex != -1 && transferIndex < transferTripStops.size() - 1) {
+                        StopTime nextTransferStop = transferTripStops.get(transferIndex);
+                        String nextStopRouteId = trips.get(nextTransferStop.tripId()).routeId();
+                        if (isRouteAbsentForStop(addedStopRouteCombos, nextTransferStop.stopId(), nextStopRouteId)) {
+                            GraphNode neighbor = new GraphNode(nextTransferStop, nextTransferStop.departureTime());
+                            neighbors.add(neighbor);
+                            addStopRouteCombo(addedStopRouteCombos, nextTransferStop.stopId(), nextStopRouteId);
+                        }
+
+                    }
+                }
+            }
+        }
         return neighbors;
+    }
+
+    private boolean isRouteAbsentForStop(Map<String, List<String>> map,
+                                        String stopId, String route) {
+        // If key doesn't exist, the route is certainly absent
+        if (!map.containsKey(stopId)) {
+            return true;
+        }
+        // Check if route is not in the list
+        return !map.get(stopId).contains(route);
     }
 
 

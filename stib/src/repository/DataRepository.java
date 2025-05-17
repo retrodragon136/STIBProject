@@ -78,4 +78,14 @@ public class DataRepository {
         }
         return matchingStops;
     }
+
+    public List<String> getStopsIdsWithSameName(String stopId) {
+        List<String> matchingStops = new ArrayList<>();
+        for (Stop stop : stopsById.values()) {
+            if (stop.stopName().equalsIgnoreCase(stopsById.get(stopId).stopName())) {
+                matchingStops.add(stop.stopId());
+            }
+        }
+        return matchingStops;
+    }
 }
