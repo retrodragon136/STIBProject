@@ -164,7 +164,7 @@ public class TransportGraph {
                         }
 
                         if (transferIndex != -1 && transferIndex < transferTripStops.size() - 1) {
-                            StopTime nextTransferStop = transferTripStops.get(transferIndex + 1);
+                            StopTime nextTransferStop = transferTripStops.get(transferIndex);
                             if (!addedStopIds.contains(nextTransferStop.stopId())) {
                                 GraphNode neighbor = new GraphNode(nextTransferStop, nextTransferStop.departureTime());
                                 neighbors.add(neighbor);
@@ -239,12 +239,44 @@ public class TransportGraph {
         Stop currentStop = null;
         LocalTime currentDeparture = null;
 
-        for (int i = 0; i < path.size(); i++) {
-            GraphNode node = path.get(i);
-            Stop stop = stops.get(node.stopTime.stopId());
+        // Filter out super nodes
+        List<GraphNode> filteredPath = path.stream()
+                .filter(node -> node.stopTime != null)
+                .collect(Collectors.toList());
 
-            // Handle trip changes or walking segments
-            if (currentTripId == null || !currentTripId.equals(node.stopTime.tripId())) {
+        for (int i = 0; i < filteredPath.size(); i++) {
+            GraphNode node = filteredPath.get(i);
+            Stop stop = stops.get(node.stopTime.stopId());
+            String nodeTripId = node.stopTime.tripId();
+
+            // Determine if we should keep this node
+            boolean keepNode = true;
+
+            if (i > 0 && i < filteredPath.size() - 1) {
+                GraphNode prevNode = filteredPath.get(i - 1);
+                GraphNode nextNode = filteredPath.get(i + 1);
+
+                boolean sameStopAsPrev = node.stopTime.stopId().equals(prevNode.stopTime.stopId());
+                boolean sameStopAsNext = node.stopTime.stopId().equals(nextNode.stopTime.stopId());
+                boolean sameTripAsPrev = nodeTripId.equals(prevNode.stopTime.tripId());
+                boolean sameTripAsNext = nodeTripId.equals(nextNode.stopTime.tripId());
+
+                // Skip if:
+                // 1. Same stop as previous and next
+                // 2. Different trip from previous
+                // 3. Different trip from next
+                if (sameStopAsPrev && sameStopAsNext &&
+                        !sameTripAsPrev && !sameTripAsNext) {
+                    keepNode = false;
+                }
+            }
+
+            if (!keepNode) {
+                continue;
+            }
+
+            // Handle trip changes
+            if (currentTripId == null || !currentTripId.equals(nodeTripId)) {
                 // Finish previous segment if exists
                 if (currentStop != null && currentDeparture != null) {
                     itinerary.append(String.format(" to %s (%s)\n",
@@ -253,24 +285,20 @@ public class TransportGraph {
                 }
 
                 // Start new segment
-                String tripId = node.stopTime.tripId();
-                if (tripId != null) {
-                    Trip trip = trips.get(tripId);
-                    Route route = routes.get(trip.routeId());
-                    currentRouteType = getTransportType(route.routeType());
-                    currentRouteName = route.shortName();
+                Trip trip = trips.get(nodeTripId);
+                Route route = routes.get(trip.routeId());
+                currentRouteType = getTransportType(route.routeType());
+                currentRouteName = route.shortName();
 
-                    itinerary.append(String.format("Take %s %s %s from %s (%s) ",
-                            route.routeId().split("-")[0], // Agency name
-                            currentRouteType,
-                            currentRouteName,
-                            stop.stopName(),
-                            node.time));
-                }
-
-                currentTripId = tripId;
+                itinerary.append(String.format("Take %s %s %s from %s (%s) ",
+                        route.routeId().split("-")[0],
+                        currentRouteType,
+                        currentRouteName,
+                        stop.stopName(),
+                        node.time));
             }
 
+            currentTripId = nodeTripId;
             currentStop = stop;
             currentDeparture = node.time;
         }

@@ -39,8 +39,8 @@ public class Main {
 //            }
 //        }
 
-        String start = "Biplan";
-        String destination = "Machelen";
+        String start = "Machelen";
+        String destination = "Yser";
         LocalTime departureTime = LocalTime.of(12, 0);
 
 
