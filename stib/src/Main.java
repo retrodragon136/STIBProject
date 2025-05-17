@@ -40,7 +40,7 @@ public class Main {
 //        }
 
         String start = "Biplan";
-        String destination = "Haren";
+        String destination = "Machelen";
         LocalTime departureTime = LocalTime.of(12, 0);
 
 

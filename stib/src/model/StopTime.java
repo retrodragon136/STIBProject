@@ -8,12 +8,4 @@ public record StopTime(String tripId, LocalTime departureTime /** minutes depuis
     public String getTripId() {
         return tripId;
     }
-
-    public int getStopSequence() {
-        return stopSequence;
-    }
-
-    public String getStopId() {
-        return stopId;
-    }
 }

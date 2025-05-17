@@ -68,4 +68,14 @@ public class DataRepository {
         }
         return null;
     }
+
+    public List<Stop> getStopsByName(String stopName) {
+        List<Stop> matchingStops = new ArrayList<>();
+        for (Stop stop : stopsById.values()) {
+            if (stop.stopName().equalsIgnoreCase(stopName)) {
+                matchingStops.add(stop);
+            }
+        }
+        return matchingStops;
+    }
 }
