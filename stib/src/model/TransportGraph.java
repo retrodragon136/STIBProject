@@ -19,10 +19,9 @@ public class TransportGraph {
     private Map<String, Map<String, List<StopTime>>> transfersByStopAndRoute;
     private Map<String, List<StopTime>> stopTimesByTrip;
     private Map<String, List<StopTime>> stopTimesByStop;
-    private Map<String, List<String>> tripsByRoute;
     static String[] agencies = {"STIB", "TEC", "SNCB", "DELIJN"};
     static String basePath = "stib/data/GTFS/";
-    private int maxWalkingDistance = 2000; // meters
+    private int maxWalkingDistance = 500; // meters
     private String avoidedTransport = "";
 
     public TransportGraph() {
@@ -31,7 +30,6 @@ public class TransportGraph {
         this.trips = new HashMap<>();
         this.stopTimesByTrip = new HashMap<>();
         this.stopTimesByStop = new HashMap<>();
-        this.tripsByRoute = new HashMap<>();
     }
 
     /**
@@ -85,7 +83,7 @@ public class TransportGraph {
                         StopTime existingStopTime = stopTimesByTrip.getOrDefault(tripId, Collections.emptyList()).stream()
                                 .filter(st -> st.stopId().equals(startStop.stopId()))
                                 .filter(st -> !st.departureTime().isBefore(startTime))
-                                .filter(st -> st.departureTime().isBefore(startTime.plus(Duration.ofMinutes(60)))) // Limit to 1 hour
+                                .filter(st -> st.departureTime().isBefore(startTime.plus(Duration.ofMinutes(120)))) // Limit to 2 hour
                                 .findFirst()
                                 .orElse(null);
 
@@ -126,7 +124,7 @@ public class TransportGraph {
                     neighbor.fScore = tentativeGScore +
                             haversineHeuristic(neighbor.stopTime.stopId(), endStops);
                     if(!avoidedTransport.isEmpty()) {
-                        String routeType = routes.get(neighbor.stopTime.tripId()).routeType();
+                        String routeType = routes.get(trips.get(neighbor.stopTime.tripId()).routeId()).routeType();
                         if (avoidedTransport.equalsIgnoreCase(routeType)) {
                             neighbor.fScore += 30; // Penalize avoided transport
                         }
@@ -417,7 +415,7 @@ public class TransportGraph {
 
         double distanceInKm = haversineDistanceMeters(stop1.stopLat(), stop1.stopLon(), stop2.stopLat(), stop2.stopLon())/1000;
 
-        // Convertir en temps estimé (minutes) en supposant une vitesse moyenne de 30 km/h
+        // Convert to estimated time (minutes) assuming an average speed of 30 km/h
         return (distanceInKm / 30) * 60;
     }
 
@@ -587,14 +585,13 @@ public class TransportGraph {
                 List<Stop> DataStops = CsvLoader.loadStops(basePath + agency + "/stops.csv");
                 List<StopTime> DataStopTimes = CsvLoader.loadStopTimes(basePath + agency + "/stop_times.csv");
 
-                // Remplissage des maps
+                // Filling maps
                 for (Route route : DataRoutes) {
                     routes.put(route.routeId(), route);
                 }
 
                 for (Trip trip : DataTrips) {
                     trips.put(trip.tripId(), trip);
-                    tripsByRoute.computeIfAbsent(trip.routeId(), k -> new ArrayList<>()).add(trip.tripId());
                 }
 
                 for (Stop stop : DataStops) {

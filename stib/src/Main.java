@@ -51,7 +51,7 @@ public class Main {
             System.out.println("Préférences de marche :");
             // Préférences de marche
             while (true) {
-                System.out.print("Distance maximale à pied (mètres, 0-2000) [500] : ");
+                System.out.print("Distance maximale à pied entre chaque correspondance(mètres, 0-2000) [500] : ");
                 String input = scanner.nextLine().trim();
                 if (input.isEmpty()) break;
                 try {
