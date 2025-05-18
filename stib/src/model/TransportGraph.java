@@ -13,13 +13,13 @@ public class TransportGraph {
     private Map<String, Stop> stops;
     private Map<String, Route> routes;
     private Map<String, Trip> trips;
-    private Map<String, Map<String, List<StopTime>>> transfersByStopAndRoute;
     private Map<String, List<StopTime>> stopTimesByTrip;
     private Map<String, List<StopTime>> stopTimesByStop;
     private Map<String, List<String>> tripsByRoute;
-    static String[] agencies = {"STIB", "SNCB", "TEC", "DELIJN"};
+    static String[] agencies = {"STIB"};
     static String basePath = "stib/data/GTFS/";
     public DataRepository repo = new DataRepository();
+    Set<GraphNode> visited = new HashSet<>();
 
     public TransportGraph() {
         this.stops = new HashMap<>();
@@ -47,8 +47,7 @@ public class TransportGraph {
         // Initialize priority queue
         PriorityQueue<GraphNode> openSet = new PriorityQueue<>(
                 Comparator.comparing((GraphNode node) -> node.fScore)  // Primary sort by A* heuristic
-                        .thenComparing(node -> node.connectionCount) // Secondary: fewer transfers
-                        .thenComparing(node -> node.time)       // Tertiary: consistency
+                        .thenComparing(node -> node.time)       // Secondary sort by time
         );
         Set<GraphNode> closedSet = new HashSet<>();
 
@@ -60,7 +59,7 @@ public class TransportGraph {
                         StopTime existingStopTime = stopTimesByTrip.getOrDefault(tripId, Collections.emptyList()).stream()
                                 .filter(st -> st.stopId().equals(startStop.stopId()))
                                 .filter(st -> !st.departureTime().isBefore(startTime))
-                                .filter(st -> st.departureTime().isBefore(startTime.plus(Duration.ofMinutes(30)))) // Limit to 1 hour
+                                .filter(st -> st.departureTime().isBefore(startTime.plus(Duration.ofMinutes(5)))) // Limit to 1 hour
                                 .findFirst()
                                 .orElse(null);
 
@@ -142,7 +141,6 @@ public class TransportGraph {
                 StopTime nextStop = tripStops.get(currentIndex);
                 if (!nextStop.departureTime().isBefore(node.time)) {
                     GraphNode neighbor = new GraphNode(nextStop, nextStop.departureTime());
-                    neighbor.connectionCount = node.connectionCount;
                     neighbors.add(neighbor);
                     addStopRouteCombo(addedStopRouteCombos, nextStop.stopId(), trips.get(nextStop.tripId()).routeId());
                 }
@@ -150,115 +148,42 @@ public class TransportGraph {
         }
 
         // 2. Transfer to other trips (only first stop)
-        neighbors.addAll(getTransitNeighbors(node, currentRouteId));
+        List<String> stopIdsBySameName = repo.getStopsIdsWithSameName(node.stopTime.stopId());
+        for(String stopId : stopIdsBySameName) {
+            List<StopTime> stopTimesBy = stopTimesByStop.getOrDefault(stopId, Collections.emptyList()).stream()
+                    .filter(st -> {
+                        // Only allow transfers to different routes
+                        String transferRouteId = trips.get(st.tripId()).routeId();
+                        return !transferRouteId.equals(currentRouteId); // Different route check
+                    })
+                    .filter(st -> !st.departureTime().isBefore(node.time)) // Future departures
+                    .filter(st -> st.departureTime().isBefore(node.time.plus(Duration.ofMinutes(30))))
+                    .sorted(Comparator.comparing(StopTime::departureTime)).toList(); // Earliest first
+            for (StopTime stopTime : stopTimesBy) {
+                List<StopTime> transferTripStops = stopTimesByTrip.get(stopTime.tripId());
+                if (transferTripStops != null) {
+                    int transferIndex = -1;
+                    for (int i = 0; i < transferTripStops.size(); i++) {
+                        if (transferTripStops.get(i).stopId().equals(stopId)) {
+                            transferIndex = i;
+                            break;
+                        }
+                    }
 
-        // 3. Then add walking connections to nearby stops
-        neighbors.addAll(getWalkingNeighbors(node));
+                    if (transferIndex != -1 && transferIndex < transferTripStops.size() - 1) {
+                        StopTime nextTransferStop = transferTripStops.get(transferIndex);
+                        String nextStopRouteId = trips.get(nextTransferStop.tripId()).routeId();
+                        if (isRouteAbsentForStop(addedStopRouteCombos, nextTransferStop.stopId(), nextStopRouteId)) {
+                            GraphNode neighbor = new GraphNode(nextTransferStop, nextTransferStop.departureTime());
+                            neighbors.add(neighbor);
+                            addStopRouteCombo(addedStopRouteCombos, nextTransferStop.stopId(), nextStopRouteId);
+                        }
 
-        return neighbors;
-    }
-
-    private List<GraphNode> getTransitNeighbors(GraphNode node, String currentRouteId) {
-        List<GraphNode> neighbors = new ArrayList<>();
-        Map<String, List<StopTime>> routeToStopTimes =
-                transfersByStopAndRoute.get(node.stopTime.stopId());
-
-        if (routeToStopTimes != null) {
-            routeToStopTimes.forEach((routeId, stopTimes) -> {
-                if (!routeId.equals(currentRouteId)) {
-                    stopTimes.stream()
-                            .filter(st -> !st.departureTime().isBefore(node.time))
-                            .min(Comparator.comparing(StopTime::departureTime))
-                            .ifPresent(earliest -> neighbors.add(new GraphNode(earliest, earliest.departureTime(), node.connectionCount+1)));
+                    }
                 }
-            });
+            }
         }
         return neighbors;
-    }
-
-    private List<GraphNode> getWalkingNeighbors(GraphNode node) {
-        List<GraphNode> walkingNeighbors = new ArrayList<>();
-        Stop currentStop = stops.get(node.stopTime.stopId());
-
-        // Get all stops within walking distance (e.g., 500 meters)
-        List<Stop> nearbyStops = findNearbyStops(currentStop, 2000);
-
-        for (Stop nearbyStop : nearbyStops) {
-            // Calculate walking time in seconds
-            int walkingTimeSeconds = calculateWalkingTime(currentStop, nearbyStop);
-
-            // Find the earliest possible departure at the target stop after walking
-            LocalTime arrivalTime = node.time.plusSeconds(walkingTimeSeconds);
-
-            stopTimesByStop.getOrDefault(nearbyStop.stopId(), Collections.emptyList()).stream()
-                    .filter(st -> !st.departureTime().isBefore(arrivalTime)) // Only future departures
-                    .min(Comparator.comparing(StopTime::departureTime)) // Get earliest departure
-                    .ifPresent(earliestDeparture -> {
-                        GraphNode neighbor = new GraphNode(earliestDeparture, earliestDeparture.departureTime());
-                        neighbor.connectionCount = node.connectionCount + 1;
-                        neighbor.parent = node;
-                        neighbor.gScore = node.gScore + walkingTimeSeconds/60.0; // Convert to minutes for consistency
-                        walkingNeighbors.add(neighbor);
-                    });
-        }
-
-        return walkingNeighbors;
-    }
-
-    private List<Stop> findNearbyStops(Stop currentStop, double radiusMeters) {
-        List<Stop> nearbyStops = new ArrayList<>();
-
-        for (Stop otherStop : stops.values()) {
-            // Skip the same stop
-            if (otherStop.stopId().equals(currentStop.stopId())) {
-                continue;
-            }
-
-            double distance = haversineDistanceMeters(
-                    currentStop.stopLat(),
-                    currentStop.stopLon(),
-                    otherStop.stopLat(),
-                    otherStop.stopLon()
-            );
-
-            if (distance <= radiusMeters) {
-                nearbyStops.add(otherStop);
-            }
-        }
-
-        return nearbyStops;
-    }
-
-    private int calculateWalkingTime(Stop fromStop, Stop toStop) {
-        // Calculate distance in meters
-        double distance = haversineDistanceMeters(
-                fromStop.stopLat(),
-                fromStop.stopLon(),
-                toStop.stopLat(),
-                toStop.stopLon()
-        );
-
-        // Average walking speed: 1.4 m/s (about 5 km/h)
-        double walkingSpeed = 1.4;
-
-        // Calculate time in seconds and round up
-        return (int) Math.ceil(distance / walkingSpeed);
-    }
-
-    // Haversine distance calculation in meters
-    private double haversineDistanceMeters(double lat1, double lon1, double lat2, double lon2) {
-        final int R = 6371; // Earth radius in kilometers
-
-        double latDistance = Math.toRadians(lat2 - lat1);
-        double lonDistance = Math.toRadians(lon2 - lon1);
-
-        double a = Math.sin(latDistance / 2) * Math.sin(latDistance / 2)
-                + Math.cos(Math.toRadians(lat1)) * Math.cos(Math.toRadians(lat2))
-                * Math.sin(lonDistance / 2) * Math.sin(lonDistance / 2);
-
-        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-        // Convert to meters
-        return R * c * 1000;
     }
 
     private boolean isRouteAbsentForStop(Map<String, List<String>> map,
@@ -278,11 +203,9 @@ public class TransportGraph {
 
     private List<GraphNode> reconstructPath(GraphNode node) {
         List<GraphNode> path = new ArrayList<>();
-        int connectionCount = node.connectionCount;  // Capture final count
         while (node != null) {
-            if (node.stopTime != null) {
+            if (node.stopTime != null) { // Only add real nodes
                 path.add(0, node);
-                node.connectionCount = connectionCount--;  // Backpropagate count
             }
             node = node.parent;
         }
@@ -298,6 +221,7 @@ public class TransportGraph {
     }
 
     private  double haversineDistance(String stopId1, String stopId2) {
+        double R = 6371; // Rayon de la Terre en kilomètres
         Stop stop1 = stops.get(stopId1);
         Stop stop2 = stops.get(stopId2);
 
@@ -305,10 +229,23 @@ public class TransportGraph {
             return Double.POSITIVE_INFINITY;
         }
 
-        double distanceInKm = haversineDistanceMeters(stop1.stopLat(), stop1.stopLon(), stop2.stopLat(), stop2.stopLon())/1000;
+        double lat1 = Math.toRadians(stop1.stopLat());
+        double lon1 = Math.toRadians(stop1.stopLon());
+        double lat2 = Math.toRadians(stop2.stopLat());
+        double lon2 = Math.toRadians(stop2.stopLon());
+
+        double dLat = lat2 - lat1;
+        double dLon = lon2 - lon1;
+
+        double a = Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+                Math.cos(lat1) * Math.cos(lat2) *
+                        Math.sin(dLon / 2) * Math.sin(dLon / 2);
+
+        double c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+        double distance = R * c; // Distance en km
 
         // Convertir en temps estimé (minutes) en supposant une vitesse moyenne de 30 km/h
-        return (distanceInKm / 30) * 60;
+        return (distance / 30) * 60;
     }
 
     public String formatPath(List<GraphNode> path) {
@@ -316,10 +253,12 @@ public class TransportGraph {
 
         StringBuilder itinerary = new StringBuilder();
         String currentTripId = null;
+        String currentRouteType = null;
+        String currentRouteName = null;
         Stop currentStop = null;
         LocalTime currentDeparture = null;
 
-        // Keep nodes with StopTime (assume walking is inferred between nodes)
+        // Filter out super nodes
         List<GraphNode> filteredPath = path.stream()
                 .filter(node -> node.stopTime != null)
                 .collect(Collectors.toList());
@@ -336,11 +275,8 @@ public class TransportGraph {
                 GraphNode prevNode = filteredPath.get(i - 1);
                 GraphNode nextNode = filteredPath.get(i + 1);
 
-                String prevNodeName = stops.get(prevNode.stopTime.stopId()).stopName();
-                String nextNodeName = stops.get(nextNode.stopTime.stopId()).stopName();
-
-                boolean sameStopAsPrev = stops.get(node.stopTime.stopId()).stopName().equals(prevNodeName);
-                boolean sameStopAsNext = stops.get(node.stopTime.stopId()).stopName().equals(nextNodeName);
+                boolean sameStopAsPrev = node.stopTime.stopId().equals(prevNode.stopTime.stopId());
+                boolean sameStopAsNext = node.stopTime.stopId().equals(nextNode.stopTime.stopId());
                 boolean sameTripAsPrev = nodeTripId.equals(prevNode.stopTime.tripId());
                 boolean sameTripAsNext = nodeTripId.equals(nextNode.stopTime.tripId());
 
@@ -358,49 +294,25 @@ public class TransportGraph {
                 continue;
             }
 
-            // Handle walking segments (including first node)
-            if (i == 0 && filteredPath.size() > 1) {
-                GraphNode nextNode = filteredPath.get(i + 1);
-                Stop nextStop = stops.get(nextNode.stopTime.stopId());
-
-                // Case: First node is walking (different stop + different trip)
-                if (!stop.stopName().equals(nextStop.stopName()) &&
-                        !nodeTripId.equals(nextNode.stopTime.tripId())) {
-
-                    long walkMinutes = Duration.between(
-                            node.time,
-                            nextNode.time
-                    ).toMinutes();
-
-                    itinerary.append(String.format("Walk from %s (%s) to %s (%s) (%d min walk)\n",
-                            stop.stopName(),
-                            node.time,
-                            nextStop.stopName(),
-                            nextNode.time,
-                            walkMinutes));
-
-                    // Skip the rest of the loop for this node (it's just a walking start point)
-                    continue;
-                }
-            }
-
-            // Handle transit segments
+            // Handle trip changes
             if (currentTripId == null || !currentTripId.equals(nodeTripId)) {
-                // Finish previous transit segment
-                if (currentStop != null) {
-                    itinerary.append(String.format("to %s (%s)\n",
+                // Finish previous segment if exists
+                if (currentStop != null && currentDeparture != null) {
+                    itinerary.append(String.format(" to %s (%s)\n",
                             currentStop.stopName(),
                             currentDeparture));
                 }
 
-                // Start new transit segment
+                // Start new segment
                 Trip trip = trips.get(nodeTripId);
                 Route route = routes.get(trip.routeId());
+                currentRouteType = getTransportType(route.routeType());
+                currentRouteName = route.shortName();
 
                 itinerary.append(String.format("Take %s %s %s from %s (%s) ",
                         route.routeId().split("-")[0],
-                        route.routeType(),
-                        route.shortName(),
+                        currentRouteType,
+                        currentRouteName,
                         stop.stopName(),
                         node.time));
             }
@@ -420,16 +332,14 @@ public class TransportGraph {
         return itinerary.toString();
     }
 
-
-    private void precomputeTransfers() {
-        transfersByStopAndRoute = new HashMap<>();
-        stopTimesByStop.forEach((stopId, stopTimes) -> {
-            Map<String, List<StopTime>> byRoute = stopTimes.stream()
-                    .collect(Collectors.groupingBy(
-                            st -> trips.get(st.tripId()).routeId()
-                    ));
-            transfersByStopAndRoute.put(stopId, byRoute);
-        });
+    private String getTransportType(String routeType) {
+        return switch(routeType.toUpperCase()) {
+            case "TRAIN" -> "TRAIN";
+            case "METRO" -> "METRO";
+            case "TRAM" -> "TRAM";
+            case "BUS" -> "BUS";
+            default -> "TRANSPORT";
+        };
     }
 
     public void loadData() {
@@ -468,10 +378,12 @@ public class TransportGraph {
                 stopTimesByTrip.values().forEach(list ->
                         list.sort(Comparator.comparingInt(StopTime::stopSequence)));
 
-                precomputeTransfers();
 
+//                System.out.println("Routes: " + DataRoutes.size());
+//                System.out.println("Trips: " + DataTrips.size());
+//                System.out.println("Stops: " + DataStops.size());
+//                System.out.println("StopTimes: " + DataStopTimes.size());
             }
-            System.out.println("== Data loading complete ==");
 
         } catch (Exception e) {
             e.printStackTrace();

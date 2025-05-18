@@ -1,8 +1,14 @@
+import model.Connection;
 import model.GraphNode;
+import model.Route;
 import model.TransportGraph;
 
+import java.time.Duration;
 import java.time.LocalTime;
+import java.time.format.DateTimeFormatter;
+import java.time.format.DateTimeParseException;
 import java.util.List;
+import java.util.Scanner;
 
 public class Main {
 
@@ -33,8 +39,8 @@ public class Main {
 //            }
 //        }
 
-        String start = "Alveringem Nieuwe Herberg";
-        String destination = "Gand-Saint-Pierre";
+        String start = "Bordet Station";
+        String destination = "Rogier";
         LocalTime departureTime = LocalTime.of(8, 0);
 
 
