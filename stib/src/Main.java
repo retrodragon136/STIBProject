@@ -66,7 +66,8 @@ public class Main {
                 }
             }
             // Transports à éviter
-            System.out.print("Types de transport à éviter (BUS - TRAM - METRO - TRAIN) Laisser vide pour ignorer: ");
+            System.out.println("Choisir un type de transport à éviter (BUS - TRAM - METRO - TRAIN)");
+            System.out.print("Laisser vide si aucune préférence : ");
             avoidedTransports = scanner.nextLine().trim();
             System.out.println("Préférences enregistrées");
         } else {
