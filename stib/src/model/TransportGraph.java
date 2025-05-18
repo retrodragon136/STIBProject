@@ -1,14 +1,17 @@
 package model;
 
 import loader.CsvLoader;
-import repository.DataRepository;
-
 import java.time.Duration;
 import java.time.LocalTime;
 import java.util.*;
 import java.util.stream.Collectors;
 
-
+/**
+ * Classe principale représentant le graphe de transport.
+ * Cette classe contient les données et les méthodes nécessaires pour
+ * modéliser un réseau de transport, calculer des itinéraires, et gérer
+ * les préférences utilisateur.
+ */
 public class TransportGraph {
     private Map<String, Stop> stops;
     private Map<String, Route> routes;
@@ -19,7 +22,6 @@ public class TransportGraph {
     private Map<String, List<String>> tripsByRoute;
     static String[] agencies = {"STIB", "TEC", "SNCB", "DELIJN"};
     static String basePath = "stib/data/GTFS/";
-    public DataRepository repo = new DataRepository();
     private int maxWalkingDistance = 2000; // meters
     private String avoidedTransport = "";
 
@@ -32,16 +34,33 @@ public class TransportGraph {
         this.tripsByRoute = new HashMap<>();
     }
 
+    /**
+     * Met à jour les préférences de l'utilisateur pour le calcul des chemins.
+     *
+     * @param maxWalkingDistance La distance maximale de marche en mètres que l'utilisateur est prêt à parcourir.
+     * @param avoidedTransport   Le type de transport que l'utilisateur souhaite éviter (par exemple, "BUS", "TRAM").
+     */
     public void updatePreferences(int maxWalkingDistance, String avoidedTransport) {
         this.maxWalkingDistance = maxWalkingDistance;
         this.avoidedTransport = avoidedTransport;
     }
 
-    // Méthode principale pour trouver le chemin
+    /**
+     * Trouve le chemin le plus court entre deux arrêts en utilisant une approche A*.
+     *
+     * @param startStopName Le nom de l'arrêt de départ.
+     * @param endStopName   Le nom de l'arrêt d'arrivée.
+     * @param startTime     L'heure de départ pour commencer le trajet.
+     * @return Une liste de `GraphNode` représentant le chemin le plus court, ou une liste vide si aucun chemin n'est trouvé.
+     */
     public List<GraphNode> findShortestPath(String startStopName, String endStopName, LocalTime startTime) {
-        // Get all possible stop IDs for start/end
-        List<Stop> startStops = repo.getStopsByName(startStopName);
-        List<Stop> endStops = repo.getStopsByName(endStopName);
+        // Get all possible stop IDs for start/end stops
+        List<Stop> startStops = stops.values().stream()
+                .filter(stop -> stop.stopName().equalsIgnoreCase(startStopName))
+                .collect(Collectors.toList());
+        List<Stop> endStops = stops.values().stream()
+                .filter(stop -> stop.stopName().equalsIgnoreCase(endStopName))
+                .collect(Collectors.toList());
 
         if (startStops.isEmpty() || endStops.isEmpty()) {
             return Collections.emptyList();
@@ -106,6 +125,12 @@ public class TransportGraph {
                     neighbor.gScore = tentativeGScore;
                     neighbor.fScore = tentativeGScore +
                             haversineHeuristic(neighbor.stopTime.stopId(), endStops);
+                    if(!avoidedTransport.isEmpty()) {
+                        String routeType = routes.get(neighbor.stopTime.tripId()).routeType();
+                        if (avoidedTransport.equalsIgnoreCase(routeType)) {
+                            neighbor.fScore += 30; // Penalize avoided transport
+                        }
+                    }
 
                     if (!openSet.contains(neighbor)  || openSet.contains(neighbor) &&
                             neighbor.fScore < current.fScore) {
@@ -118,6 +143,16 @@ public class TransportGraph {
         return Collections.emptyList();
     }
 
+    /**
+     * Récupère une liste des identifiants de trajets (`tripId`) disponibles pour un arrêt donné
+     * à partir d'une heure spécifique. Ces trajets constitueront les différents points de départ de l'algorithme de
+     * recherche.
+     *
+     * @param stopId L'identifiant de l'arrêt pour lequel récupérer les trajets.
+     * @param time   L'heure à partir de laquelle les trajets doivent être considérés.
+     * @return Une liste des identifiants de trajets (`tripId`) triés par heure de départ,
+     *         limités à 50 résultats distincts.
+     */
     private List<String> getInitialTrips(String stopId, LocalTime time) {
         return stopTimesByStop.getOrDefault(stopId, Collections.emptyList()).stream()
                 .filter(st -> !st.departureTime().isBefore(time))
@@ -128,12 +163,28 @@ public class TransportGraph {
                 .collect(Collectors.toList());
     }
 
-    // Helper method to add pairs
+    /**
+     * Ajoute une association entre un identifiant d'arrêt (`stopId`) et une route donnée
+     * dans une map. Si l'identifiant d'arrêt n'existe pas encore dans la map, une nouvelle
+     * liste est créée pour cet identifiant.
+     *
+     * @param map    La map contenant les associations entre les identifiants d'arrêt et les routes.
+     * @param stopId L'identifiant de l'arrêt à associer à une route.
+     * @param route  La route à associer à l'identifiant d'arrêt.
+     */
     private void addStopRouteCombo(Map<String, List<String>> map, String stopId, String route) {
         map.computeIfAbsent(stopId, k -> new ArrayList<>()).add(route);
     }
 
 
+    /**
+     * Récupère les voisins d'un nœud donné dans le graphe de transport.
+     * Cela inclut les arrêts suivants sur le même trajet, les transferts vers d'autres trajets
+     * et les connexions piétonnes vers des arrêts à proximité.
+     *
+     * @param node Le nœud pour lequel récupérer les voisins.
+     * @return Une liste de nœuds voisins.
+     */
     private List<GraphNode> getNeighbors(GraphNode node) {
         List<GraphNode> neighbors = new ArrayList<>();
         Map<String, List<String>> addedStopRouteCombos = new HashMap<>();
@@ -164,6 +215,14 @@ public class TransportGraph {
         return neighbors;
     }
 
+    /**
+     * Récupère les voisins de transit d'un nœud donné, c'est-à-dire les arrêts de transfert
+     * vers d'autres trajets à partir du même arrêt.
+     *
+     * @param node          Le nœud pour lequel récupérer les voisins de transit.
+     * @param currentRouteId L'identifiant de la route actuelle pour éviter les transferts sur la même route.
+     * @return Une liste de nœuds voisins de transit.
+     */
     private List<GraphNode> getTransitNeighbors(GraphNode node, String currentRouteId) {
         List<GraphNode> neighbors = new ArrayList<>();
         Map<String, List<StopTime>> routeToStopTimes =
@@ -182,12 +241,19 @@ public class TransportGraph {
         return neighbors;
     }
 
+    /**
+     * Récupère les voisins de marche d'un nœud donné, c'est-à-dire les arrêts à proximité
+     * accessibles à pied depuis l'arrêt actuel.
+     *
+     * @param node Le nœud pour lequel récupérer les voisins de marche.
+     * @return Une liste de nœuds voisins de marche.
+     */
     private List<GraphNode> getWalkingNeighbors(GraphNode node) {
         List<GraphNode> walkingNeighbors = new ArrayList<>();
         Stop currentStop = stops.get(node.stopTime.stopId());
 
         // Get all stops within walking distance
-        List<Stop> nearbyStops = findNearbyStops(currentStop, 2000);
+        List<Stop> nearbyStops = findNearbyStops(currentStop, maxWalkingDistance);
 
         for (Stop nearbyStop : nearbyStops) {
             // Calculate walking time in seconds
@@ -210,6 +276,13 @@ public class TransportGraph {
         return walkingNeighbors;
     }
 
+    /**
+     * Trouve les arrêts à proximité d'un arrêt donné dans un rayon spécifié.
+     *
+     * @param currentStop  L'arrêt actuel.
+     * @param radiusMeters Le rayon de recherche en mètres.
+     * @return Une liste d'arrêts à proximité.
+     */
     private List<Stop> findNearbyStops(Stop currentStop, double radiusMeters) {
         List<Stop> nearbyStops = new ArrayList<>();
 
@@ -234,6 +307,13 @@ public class TransportGraph {
         return nearbyStops;
     }
 
+    /**
+     * Calcule le temps de marche entre deux arrêts en utilisant la distance Haversine.
+     *
+     * @param fromStop L'arrêt de départ.
+     * @param toStop   L'arrêt d'arrivée.
+     * @return Le temps de marche en secondes.
+     */
     private int calculateWalkingTime(Stop fromStop, Stop toStop) {
         // Calculate distance in meters
         double distance = haversineDistanceMeters(
@@ -250,7 +330,15 @@ public class TransportGraph {
         return (int) Math.ceil(distance / walkingSpeed);
     }
 
-    // Haversine distance calculation in meters
+    /**
+     * Calcule la distance entre deux points géographiques en utilisant la formule Haversine.
+     *
+     * @param lat1 Latitude du premier point.
+     * @param lon1 Longitude du premier point.
+     * @param lat2 Latitude du deuxième point.
+     * @param lon2 Longitude du deuxième point.
+     * @return La distance en mètres.
+     */
     private double haversineDistanceMeters(double lat1, double lon1, double lat2, double lon2) {
         final int R = 6371; // Earth radius in kilometers
 
@@ -267,10 +355,23 @@ public class TransportGraph {
     }
 
 
+    /**
+     * Calcule la différence de temps entre deux heures.
+     *
+     * @param t1 La première heure.
+     * @param t2 La deuxième heure.
+     * @return La différence de temps en minutes.
+     */
     private  double getTimeDifference(LocalTime t1, LocalTime t2) {
         return Math.abs(t1.until(t2, java.time.temporal.ChronoUnit.MINUTES));
     }
 
+    /**
+     * Reconstruit le chemin à partir d'un nœud donné jusqu'à la racine.
+     *
+     * @param node Le nœud de départ pour reconstruire le chemin.
+     * @return Une liste de nœuds représentant le chemin reconstruit.
+     */
     private List<GraphNode> reconstructPath(GraphNode node) {
         List<GraphNode> path = new ArrayList<>();
         int connectionCount = node.connectionCount;  // Capture final count
@@ -284,7 +385,14 @@ public class TransportGraph {
         return path;
     }
 
-    // Modified heuristic to consider all end stops
+    /**
+     * Calcule une heuristique de distance entre un arrêt donné et une liste d'arrêts de destination.
+     * Utilise la distance Haversine pour estimer le temps de trajet.
+     *
+     * @param stopId    L'identifiant de l'arrêt de départ.
+     * @param endStops  La liste des arrêts de destination.
+     * @return La distance estimée en minutes.
+     */
     private double haversineHeuristic(String stopId, List<Stop> endStops) {
         return endStops.stream()
                 .mapToDouble(end -> haversineDistance(stopId, end.stopId()))
@@ -292,6 +400,13 @@ public class TransportGraph {
                 .orElse(Double.MAX_VALUE);
     }
 
+    /**
+     * Calcule la distance entre deux arrêts en utilisant la formule Haversine.
+     *
+     * @param stopId1 L'identifiant du premier arrêt.
+     * @param stopId2 L'identifiant du deuxième arrêt.
+     * @return La distance estimée en minutes.
+     */
     private  double haversineDistance(String stopId1, String stopId2) {
         Stop stop1 = stops.get(stopId1);
         Stop stop2 = stops.get(stopId2);
@@ -306,6 +421,12 @@ public class TransportGraph {
         return (distanceInKm / 30) * 60;
     }
 
+    /**
+     * Formate le chemin trouvé en une chaîne de caractères lisible.
+     *
+     * @param path La liste des nœuds représentant le chemin trouvé.
+     * @return Une chaîne formatée représentant l'itinéraire.
+     */
     public String formatPath(List<GraphNode> path) {
         if (path.isEmpty()) return "No path found";
 
@@ -319,34 +440,43 @@ public class TransportGraph {
                 .collect(Collectors.toList());
 
         for (int i = 0; i < filteredPath.size(); i++) {
-            GraphNode node = filteredPath.get(i);
-            Stop stop = stops.get(node.stopTime.stopId());
-            String nodeTripId = node.stopTime.tripId();
-
             // Determine if we should keep this node
             boolean keepNode = true;
 
             if (i > 0 && i < filteredPath.size() - 1) {
+                GraphNode currentNode = filteredPath.get(i);
                 GraphNode prevNode = filteredPath.get(i - 1);
                 GraphNode nextNode = filteredPath.get(i + 1);
 
                 String prevNodeName = stops.get(prevNode.stopTime.stopId()).stopName();
                 String nextNodeName = stops.get(nextNode.stopTime.stopId()).stopName();
 
-                boolean sameStopAsPrev = stops.get(node.stopTime.stopId()).stopName().equals(prevNodeName);
-                boolean sameStopAsNext = stops.get(node.stopTime.stopId()).stopName().equals(nextNodeName);
-                boolean sameTripAsPrev = nodeTripId.equals(prevNode.stopTime.tripId());
-                boolean sameTripAsNext = nodeTripId.equals(nextNode.stopTime.tripId());
+                boolean sameStopNameAsPrev = stops.get(currentNode.stopTime.stopId()).stopName().equals(prevNodeName);
+                boolean sameStopNameAsNext = stops.get(currentNode.stopTime.stopId()).stopName().equals(nextNodeName);
+                boolean sameTripAsPrev = currentNode.stopTime.tripId().equals(prevNode.stopTime.tripId());
+                boolean sameTripAsNext = currentNode.stopTime.tripId().equals(nextNode.stopTime.tripId());
+
+                boolean differentStopIdAsPrev = !currentNode.stopTime.stopId().equals(prevNode.stopTime.stopId());
+                boolean differentStopIDAsNext = !currentNode.stopTime.stopId().equals(nextNode.stopTime.stopId());
+
+                if (differentStopIdAsPrev && differentStopIDAsNext && !sameTripAsPrev && !sameTripAsNext) {
+                    i++;  // Skip next iteration
+                }
 
                 // Skip if:
                 // 1. Same stop as previous and next
                 // 2. Different trip from previous
                 // 3. Different trip from next
-                if (sameStopAsPrev && sameStopAsNext &&
+                if (sameStopNameAsPrev && sameStopNameAsNext &&
                         !sameTripAsPrev && !sameTripAsNext) {
                     keepNode = false;
                 }
+
             }
+
+            GraphNode node = filteredPath.get(i);
+            Stop stop = stops.get(node.stopTime.stopId());
+            String nodeTripId = node.stopTime.tripId();
 
             if (!keepNode) {
                 continue;
@@ -426,6 +556,11 @@ public class TransportGraph {
         return itinerary.toString();
     }
 
+    /**
+     * Pré-calculer les transferts entre les arrêts et les trajets.
+     * Cette méthode remplit la map `transfersByStopAndRoute` pour faciliter
+     * la recherche de transferts lors du calcul des itinéraires.
+     */
     void precomputeTransfers() {
         transfersByStopAndRoute = new HashMap<>();
         stopTimesByStop.forEach((stopId, stopTimes) -> {
@@ -437,6 +572,11 @@ public class TransportGraph {
         });
     }
 
+    /**
+     * Charge les données GTFS à partir des fichiers CSV.
+     * Cette méthode parcourt les agences spécifiées et charge les données
+     * dans les structures de données appropriées.
+     */
     public void loadData() {
         try {
             for (String agency : agencies) {
@@ -446,10 +586,6 @@ public class TransportGraph {
                 List<Trip> DataTrips = CsvLoader.loadTrips(basePath + agency + "/trips.csv");
                 List<Stop> DataStops = CsvLoader.loadStops(basePath + agency + "/stops.csv");
                 List<StopTime> DataStopTimes = CsvLoader.loadStopTimes(basePath + agency + "/stop_times.csv");
-                repo.indexStops(DataStops);
-                repo.indexRoutes(DataRoutes);
-                repo.indexTrips(DataTrips);
-                repo.indexStopTimes(DataStopTimes);
 
                 // Remplissage des maps
                 for (Route route : DataRoutes) {
