@@ -17,7 +17,7 @@ public class TransportGraph {
     private Map<String, List<StopTime>> stopTimesByTrip;
     private Map<String, List<StopTime>> stopTimesByStop;
     private Map<String, List<String>> tripsByRoute;
-    static String[] agencies = {"STIB", "TEC", "SNCB", "DELIJN"};
+    static String[] agencies = {"STIB", "SNCB", "TEC", "DELIJN"};
     static String basePath = "stib/data/GTFS/";
     public DataRepository repo = new DataRepository();
 
@@ -47,7 +47,8 @@ public class TransportGraph {
         // Initialize priority queue
         PriorityQueue<GraphNode> openSet = new PriorityQueue<>(
                 Comparator.comparing((GraphNode node) -> node.fScore)  // Primary sort by A* heuristic
-                        .thenComparing(node -> node.time)       // Secondary sort by time
+                        .thenComparing(node -> node.connectionCount) // Secondary: fewer transfers
+                        .thenComparing(node -> node.time)       // Tertiary: consistency
         );
         Set<GraphNode> closedSet = new HashSet<>();
 
@@ -59,7 +60,7 @@ public class TransportGraph {
                         StopTime existingStopTime = stopTimesByTrip.getOrDefault(tripId, Collections.emptyList()).stream()
                                 .filter(st -> st.stopId().equals(startStop.stopId()))
                                 .filter(st -> !st.departureTime().isBefore(startTime))
-                                .filter(st -> st.departureTime().isBefore(startTime.plus(Duration.ofMinutes(20)))) // Limit to 1 hour
+                                .filter(st -> st.departureTime().isBefore(startTime.plus(Duration.ofMinutes(30)))) // Limit to 1 hour
                                 .findFirst()
                                 .orElse(null);
 
@@ -141,6 +142,7 @@ public class TransportGraph {
                 StopTime nextStop = tripStops.get(currentIndex);
                 if (!nextStop.departureTime().isBefore(node.time)) {
                     GraphNode neighbor = new GraphNode(nextStop, nextStop.departureTime());
+                    neighbor.connectionCount = node.connectionCount;
                     neighbors.add(neighbor);
                     addStopRouteCombo(addedStopRouteCombos, nextStop.stopId(), trips.get(nextStop.tripId()).routeId());
                 }
@@ -148,7 +150,7 @@ public class TransportGraph {
         }
 
         // 2. Transfer to other trips (only first stop)
-        neighbors.addAll(getTransitNeighbors(node, currentRouteId, addedStopRouteCombos));
+        neighbors.addAll(getTransitNeighbors(node, currentRouteId));
 
         // 3. Then add walking connections to nearby stops
         neighbors.addAll(getWalkingNeighbors(node));
@@ -156,43 +158,20 @@ public class TransportGraph {
         return neighbors;
     }
 
-    private List<GraphNode> getTransitNeighbors(GraphNode node, String currentRouteId,
-                                                Map<String, List<String>> addedStopRouteCombos)  {
+    private List<GraphNode> getTransitNeighbors(GraphNode node, String currentRouteId) {
         List<GraphNode> neighbors = new ArrayList<>();
-        List<String> stopIdsBySameName = repo.getStopsIdsWithSameName(node.stopTime.stopId());
-        for(String stopId : stopIdsBySameName) {
-            List<StopTime> stopTimesBy = stopTimesByStop.getOrDefault(stopId, Collections.emptyList()).stream()
-                    .filter(st -> {
-                        // Only allow transfers to different routes
-                        String transferRouteId = trips.get(st.tripId()).routeId();
-                        return !transferRouteId.equals(currentRouteId); // Different route check
-                    })
-                    .filter(st -> !st.departureTime().isBefore(node.time)) // Future departures
-                    .filter(st -> st.departureTime().isBefore(node.time.plus(Duration.ofMinutes(30))))
-                    .sorted(Comparator.comparing(StopTime::departureTime)).toList(); // Earliest first
-            for (StopTime stopTime : stopTimesBy) {
-                List<StopTime> transferTripStops = stopTimesByTrip.get(stopTime.tripId());
-                if (transferTripStops != null) {
-                    int transferIndex = -1;
-                    for (int i = 0; i < transferTripStops.size(); i++) {
-                        if (transferTripStops.get(i).stopId().equals(stopId)) {
-                            transferIndex = i;
-                            break;
-                        }
-                    }
+        Map<String, List<StopTime>> routeToStopTimes =
+                transfersByStopAndRoute.get(node.stopTime.stopId());
 
-                    if (transferIndex != -1 && transferIndex < transferTripStops.size() - 1) {
-                        StopTime nextTransferStop = transferTripStops.get(transferIndex);
-                        String nextStopRouteId = trips.get(nextTransferStop.tripId()).routeId();
-                        if (isRouteAbsentForStop(addedStopRouteCombos, nextTransferStop.stopId(), nextStopRouteId)) {
-                            GraphNode neighbor = new GraphNode(nextTransferStop, nextTransferStop.departureTime());
-                            neighbors.add(neighbor);
-                            addStopRouteCombo(addedStopRouteCombos, nextTransferStop.stopId(), nextStopRouteId);
-                        }
-
-                    }
+        if (routeToStopTimes != null) {
+            routeToStopTimes.forEach((routeId, stopTimes) -> {
+                if (!routeId.equals(currentRouteId)) {
+                    stopTimes.stream()
+                            .filter(st -> !st.departureTime().isBefore(node.time))
+                            .min(Comparator.comparing(StopTime::departureTime))
+                            .ifPresent(earliest -> neighbors.add(new GraphNode(earliest, earliest.departureTime(), node.connectionCount+1)));
                 }
-            }
+            });
         }
         return neighbors;
     }
@@ -216,6 +195,7 @@ public class TransportGraph {
                     .min(Comparator.comparing(StopTime::departureTime)) // Get earliest departure
                     .ifPresent(earliestDeparture -> {
                         GraphNode neighbor = new GraphNode(earliestDeparture, earliestDeparture.departureTime());
+                        neighbor.connectionCount = node.connectionCount + 1;
                         neighbor.parent = node;
                         neighbor.gScore = node.gScore + walkingTimeSeconds/60.0; // Convert to minutes for consistency
                         walkingNeighbors.add(neighbor);
@@ -298,9 +278,11 @@ public class TransportGraph {
 
     private List<GraphNode> reconstructPath(GraphNode node) {
         List<GraphNode> path = new ArrayList<>();
+        int connectionCount = node.connectionCount;  // Capture final count
         while (node != null) {
-            if (node.stopTime != null) { // Only add real nodes
+            if (node.stopTime != null) {
                 path.add(0, node);
+                node.connectionCount = connectionCount--;  // Backpropagate count
             }
             node = node.parent;
         }
@@ -334,12 +316,10 @@ public class TransportGraph {
 
         StringBuilder itinerary = new StringBuilder();
         String currentTripId = null;
-        String currentRouteType = null;
-        String currentRouteName = null;
         Stop currentStop = null;
         LocalTime currentDeparture = null;
 
-        // Filter out super nodes
+        // Keep nodes with StopTime (assume walking is inferred between nodes)
         List<GraphNode> filteredPath = path.stream()
                 .filter(node -> node.stopTime != null)
                 .collect(Collectors.toList());
@@ -360,7 +340,7 @@ public class TransportGraph {
                 String nextNodeName = stops.get(nextNode.stopTime.stopId()).stopName();
 
                 boolean sameStopAsPrev = stops.get(node.stopTime.stopId()).stopName().equals(prevNodeName);
-                boolean sameStopAsNext =  stops.get(node.stopTime.stopId()).stopName().equals(nextNodeName);
+                boolean sameStopAsNext = stops.get(node.stopTime.stopId()).stopName().equals(nextNodeName);
                 boolean sameTripAsPrev = nodeTripId.equals(prevNode.stopTime.tripId());
                 boolean sameTripAsNext = nodeTripId.equals(nextNode.stopTime.tripId());
 
@@ -378,25 +358,49 @@ public class TransportGraph {
                 continue;
             }
 
-            // Handle trip changes
+            // Handle walking segments (including first node)
+            if (i == 0 && filteredPath.size() > 1) {
+                GraphNode nextNode = filteredPath.get(i + 1);
+                Stop nextStop = stops.get(nextNode.stopTime.stopId());
+
+                // Case: First node is walking (different stop + different trip)
+                if (!stop.stopName().equals(nextStop.stopName()) &&
+                        !nodeTripId.equals(nextNode.stopTime.tripId())) {
+
+                    long walkMinutes = Duration.between(
+                            node.time,
+                            nextNode.time
+                    ).toMinutes();
+
+                    itinerary.append(String.format("Walk from %s (%s) to %s (%s) (%d min walk)\n",
+                            stop.stopName(),
+                            node.time,
+                            nextStop.stopName(),
+                            nextNode.time,
+                            walkMinutes));
+
+                    // Skip the rest of the loop for this node (it's just a walking start point)
+                    continue;
+                }
+            }
+
+            // Handle transit segments
             if (currentTripId == null || !currentTripId.equals(nodeTripId)) {
-                // Finish previous segment if exists
-                if (currentStop != null && currentDeparture != null) {
-                    itinerary.append(String.format(" to %s (%s)\n",
+                // Finish previous transit segment
+                if (currentStop != null) {
+                    itinerary.append(String.format("to %s (%s)\n",
                             currentStop.stopName(),
                             currentDeparture));
                 }
 
-                // Start new segment
+                // Start new transit segment
                 Trip trip = trips.get(nodeTripId);
                 Route route = routes.get(trip.routeId());
-                currentRouteType = getTransportType(route.routeType());
-                currentRouteName = route.shortName();
 
                 itinerary.append(String.format("Take %s %s %s from %s (%s) ",
                         route.routeId().split("-")[0],
-                        currentRouteType,
-                        currentRouteName,
+                        route.routeType(),
+                        route.shortName(),
                         stop.stopName(),
                         node.time));
             }
@@ -416,14 +420,16 @@ public class TransportGraph {
         return itinerary.toString();
     }
 
-    private String getTransportType(String routeType) {
-        return switch(routeType.toUpperCase()) {
-            case "TRAIN" -> "TRAIN";
-            case "METRO" -> "METRO";
-            case "TRAM" -> "TRAM";
-            case "BUS" -> "BUS";
-            default -> "TRANSPORT";
-        };
+
+    private void precomputeTransfers() {
+        transfersByStopAndRoute = new HashMap<>();
+        stopTimesByStop.forEach((stopId, stopTimes) -> {
+            Map<String, List<StopTime>> byRoute = stopTimes.stream()
+                    .collect(Collectors.groupingBy(
+                            st -> trips.get(st.tripId()).routeId()
+                    ));
+            transfersByStopAndRoute.put(stopId, byRoute);
+        });
     }
 
     public void loadData() {
@@ -462,9 +468,10 @@ public class TransportGraph {
                 stopTimesByTrip.values().forEach(list ->
                         list.sort(Comparator.comparingInt(StopTime::stopSequence)));
 
-
+                precomputeTransfers();
 
             }
+            System.out.println("== Data loading complete ==");
 
         } catch (Exception e) {
             e.printStackTrace();

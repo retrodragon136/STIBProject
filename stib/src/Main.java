@@ -34,8 +34,8 @@ public class Main {
 //        }
 
         String start = "Alveringem Nieuwe Herberg";
-        String destination = "Furnes";
-        LocalTime departureTime = LocalTime.of(10, 30);
+        String destination = "Gand-Saint-Pierre";
+        LocalTime departureTime = LocalTime.of(8, 0);
 
 
         List<GraphNode> path = graph.findShortestPath(start, destination, departureTime);

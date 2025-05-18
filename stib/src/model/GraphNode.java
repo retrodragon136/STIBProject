@@ -21,6 +21,15 @@ public class GraphNode {
         this.connectionCount = 0; // Initialize with 0 connections
     }
 
+    public GraphNode(StopTime stopTime, LocalTime time, int connectionCount) {
+        this.stopTime = stopTime;
+        this.time = time;
+        this.gScore = Double.POSITIVE_INFINITY;
+        this.fScore = Double.POSITIVE_INFINITY;
+        this.parent = null;
+        this.connectionCount = connectionCount; // Initialize with 0 connections
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
